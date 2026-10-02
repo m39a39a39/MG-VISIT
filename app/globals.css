@@ -9,3 +9,9 @@
 .customer input[type="checkbox"]{width:24px;height:24px;min-width:24px;flex:0 0 24px;margin:2px 0 0;padding:0}
 .customer>div{min-width:0;flex:1}
 .customer>div div,.customer>div small{overflow-wrap:anywhere;white-space:pre-wrap}
+
+.dateLine{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.dateLine label{font-size:13px;font-weight:700;white-space:nowrap}
+.dateLine input[type="date"]{width:auto;min-width:150px;padding:8px 10px;font-size:14px}
+.factoryOrderRow{align-items:flex-start}
+@media(max-width:520px){.dateLine{align-items:center}.dateLine input[type="date"]{min-width:138px;max-width:165px}}
