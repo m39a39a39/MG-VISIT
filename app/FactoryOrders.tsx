@@ -7,6 +7,7 @@ type FactoryOrder={
   id:number;
   factory_name:string;
   product_details:string;
+  order_date:string;
   created_by:string;
   created_at:string;
 };
@@ -27,6 +28,10 @@ type ShipmentOrder={
 };
 
 type View="preparing"|"shipped"|"received";
+
+const todayDate=()=>new Date().toLocaleDateString("en-CA");
+const toIsoDate=(date:string)=>date+`T12:00:00.000Z`;
+const onlyDate=(value:string|null)=>value?new Date(value).toLocaleDateString("ar",{dateStyle:"medium"}):"—";
 
 export default function FactoryOrders({adminId}:{adminId:string}){
   const [orders,setOrders]=useState<FactoryOrder[]>([]);
@@ -87,11 +92,14 @@ export default function FactoryOrders({adminId}:{adminId:string}){
     const {error}=await supabase().from("factory_orders").insert({
       factory_name:String(f.get("factory_name")).trim(),
       product_details:String(f.get("product_details")).trim(),
+      order_date:String(f.get("order_date")),
       created_by:adminId
     });
     setSaving(false);
     if(error){setMessage({type:"err",text:error.message});return}
     form.reset();
+    const dateInput=form.elements.namedItem("order_date") as HTMLInputElement|null;
+    if(dateInput)dateInput.value=todayDate();
     setMessage({type:"ok",text:"تمت إضافة الطلب إلى قيد التجهيز."});
     await load();
   }
@@ -101,9 +109,11 @@ export default function FactoryOrders({adminId}:{adminId:string}){
     if(!selected.size||saving)return;
     setSaving(true);setMessage(null);
     const form=e.currentTarget,f=new FormData(form),s=supabase();
+    const shippedDate=String(f.get("shipped_date"));
     const {data:shipment,error:shipmentError}=await s.from("shipments").insert({
       carrier:String(f.get("carrier")).trim(),
       tracking_number:String(f.get("tracking_number")).trim(),
+      shipped_at:toIsoDate(shippedDate),
       created_by:adminId
     }).select("id").single();
 
@@ -130,6 +140,21 @@ export default function FactoryOrders({adminId}:{adminId:string}){
     await load();
   }
 
+  async function changeOrderDate(id:number,date:string){
+    if(!date)return;
+    const {error}=await supabase().from("factory_orders").update({order_date:date}).eq("id",id);
+    if(error){setMessage({type:"err",text:error.message});return}
+    setOrders(prev=>prev.map(x=>x.id===id?{...x,order_date:date}:x));
+  }
+
+  async function changeShipmentDate(id:number,date:string){
+    if(!date)return;
+    const shipped_at=toIsoDate(date);
+    const {error}=await supabase().from("shipments").update({shipped_at}).eq("id",id);
+    if(error){setMessage({type:"err",text:error.message});return}
+    setShipments(prev=>prev.map(x=>x.id===id?{...x,shipped_at}:x));
+  }
+
   async function receiveShipment(shipmentId:number){
     if(saving)return;
     setSaving(true);setMessage(null);
@@ -146,6 +171,20 @@ export default function FactoryOrders({adminId}:{adminId:string}){
 
   const fmt=(value:string|null)=>value?new Date(value).toLocaleString("ar",{dateStyle:"medium",timeStyle:"short"}):"—";
   const ordersFor=(shipmentId:number)=>orders.filter(o=>links.some(l=>l.shipment_id===shipmentId&&l.order_id===o.id));
+
+  const orderDetails=(o:FactoryOrder)=><div className="history" key={o.id}>
+    <b>{o.factory_name}</b>
+    <span>{o.product_details}</span>
+    <div className="dateLine">
+      <label>تاريخ الطلب</label>
+      <input type="date" value={o.order_date} onChange={e=>changeOrderDate(o.id,e.target.value)}/>
+    </div>
+  </div>;
+
+  const shipmentDateInput=(sh:Shipment)=><div className="dateLine top8">
+    <label>تاريخ الشحن</label>
+    <input type="date" value={sh.shipped_at.slice(0,10)} onChange={e=>changeShipmentDate(sh.id,e.target.value)}/>
+  </div>;
 
   return <>
     <div className="row reportHead">
@@ -164,19 +203,23 @@ export default function FactoryOrders({adminId}:{adminId:string}){
       <form className="card" onSubmit={addOrder}>
         <div className="field"><label>اسم المصنع</label><input name="factory_name" required/></div>
         <div className="field"><label>تفاصيل المنتج</label><textarea name="product_details" placeholder="مثال: MG-825 × 500&#10;MG-834 × 300" required/></div>
+        <div className="field"><label>تاريخ الطلب</label><input name="order_date" type="date" defaultValue={todayDate()} required/></div>
         <button className="primary full" disabled={saving}>{saving?"جاري الحفظ…":"إضافة الطلب"}</button>
       </form>
 
       {preparing.length>0&&<div className="card">
         <div className="row"><b>اختر الطلبات التي شُحنت معًا</b><span className="badge">{selected.size}</span></div>
-        {preparing.map(order=><label className="customer" key={order.id}>
+        {preparing.map(order=><div className="customer factoryOrderRow" key={order.id}>
           <input type="checkbox" checked={selected.has(order.id)} onChange={()=>toggle(order.id)}/>
           <div>
             <b>{order.factory_name}</b>
             <div>{order.product_details}</div>
-            <small className="muted">أضيف: {fmt(order.created_at)}</small>
+            <div className="dateLine top8">
+              <label>تاريخ الطلب</label>
+              <input type="date" value={order.order_date} onChange={e=>changeOrderDate(order.id,e.target.value)}/>
+            </div>
           </div>
-        </label>)}
+        </div>)}
         <button className="primary full" disabled={!selected.size} onClick={()=>setShowShipping(true)}>تم الشحن</button>
       </div>}
 
@@ -189,6 +232,7 @@ export default function FactoryOrders({adminId}:{adminId:string}){
           <form onSubmit={createShipment}>
             <div className="field"><label>شركة الشحن</label><input name="carrier" required/></div>
             <div className="field"><label>رقم الشحنة / التتبع</label><input name="tracking_number" required/></div>
+            <div className="field"><label>تاريخ الشحن</label><input name="shipped_date" type="date" defaultValue={todayDate()} required/></div>
             <button className="primary full" disabled={saving}>{saving?"جاري الحفظ…":"تأكيد تم الشحن"}</button>
           </form>
         </div>
@@ -201,10 +245,8 @@ export default function FactoryOrders({adminId}:{adminId:string}){
           <div><b>{sh.carrier}</b><div className="muted">{sh.tracking_number}</div></div>
           <span className="status">تم الشحن</span>
         </div>
-        <div className="muted top8">تاريخ الشحن: {fmt(sh.shipped_at)}</div>
-        <div className="visitDetails">
-          {ordersFor(sh.id).map(o=><div className="history" key={o.id}><b>{o.factory_name}</b><span>{o.product_details}</span></div>)}
-        </div>
+        {shipmentDateInput(sh)}
+        <div className="visitDetails">{ordersFor(sh.id).map(orderDetails)}</div>
         <button className="primary full" disabled={saving} onClick={()=>receiveShipment(sh.id)}>تم الاستلام</button>
       </div>)}
       {!shipped.length&&<div className="card muted">لا توجد شحنات قيد الاستلام.</div>}
@@ -216,11 +258,9 @@ export default function FactoryOrders({adminId}:{adminId:string}){
           <div><b>{sh.carrier}</b><div className="muted">{sh.tracking_number}</div></div>
           <span className="status ok">تم الاستلام</span>
         </div>
-        <div className="muted top8">شُحنت: {fmt(sh.shipped_at)}</div>
-        <div className="muted">تم الاستلام: {fmt(sh.received_at)}</div>
-        <div className="visitDetails">
-          {ordersFor(sh.id).map(o=><div className="history" key={o.id}><b>{o.factory_name}</b><span>{o.product_details}</span></div>)}
-        </div>
+        {shipmentDateInput(sh)}
+        <div className="muted top8">تم الاستلام: {fmt(sh.received_at)}</div>
+        <div className="visitDetails">{ordersFor(sh.id).map(orderDetails)}</div>
       </div>)}
       {!received.length&&<div className="card muted">لا توجد شحنات مستلمة بعد.</div>}
     </>}
