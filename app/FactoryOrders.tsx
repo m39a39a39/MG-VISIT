@@ -12,6 +12,13 @@ type FactoryOrder={
   created_at:string;
 };
 
+type FactoryOrderItem={
+  id:number;
+  order_id:number;
+  product_details:string;
+  created_at:string;
+};
+
 type Shipment={
   id:number;
   carrier:string;
@@ -22,21 +29,21 @@ type Shipment={
   created_by:string;
 };
 
-type ShipmentOrder={
+type ShipmentItem={
   shipment_id:number;
-  order_id:number;
+  item_id:number;
 };
 
 type View="preparing"|"shipped"|"received";
 
 const todayDate=()=>new Date().toLocaleDateString("en-CA");
 const toIsoDate=(date:string)=>date+`T12:00:00.000Z`;
-const onlyDate=(value:string|null)=>value?new Date(value).toLocaleDateString("ar",{dateStyle:"medium"}):"—";
 
 export default function FactoryOrders({adminId}:{adminId:string}){
   const [orders,setOrders]=useState<FactoryOrder[]>([]);
+  const [items,setItems]=useState<FactoryOrderItem[]>([]);
   const [shipments,setShipments]=useState<Shipment[]>([]);
-  const [links,setLinks]=useState<ShipmentOrder[]>([]);
+  const [links,setLinks]=useState<ShipmentItem[]>([]);
   const [view,setView]=useState<View>("preparing");
   const [selected,setSelected]=useState<Set<number>>(new Set());
   const [showShipping,setShowShipping]=useState(false);
@@ -45,36 +52,39 @@ export default function FactoryOrders({adminId}:{adminId:string}){
 
   async function load(){
     const s=supabase();
-    const [{data:o,error:oe},{data:sh,error:se},{data:ln,error:le}]=await Promise.all([
+    const [{data:o,error:oe},{data:i,error:ie},{data:sh,error:se},{data:ln,error:le}]=await Promise.all([
       s.from("factory_orders").select("*").order("created_at",{ascending:false}),
+      s.from("factory_order_items").select("*").order("id"),
       s.from("shipments").select("*").order("shipped_at",{ascending:false}),
-      s.from("shipment_orders").select("*")
+      s.from("shipment_items").select("*")
     ]);
-    if(oe||se||le){
-      setMessage({type:"err",text:(oe||se||le)?.message||"تعذر تحميل الطلبات"});
+    if(oe||ie||se||le){
+      setMessage({type:"err",text:(oe||ie||se||le)?.message||"تعذر تحميل الطلبات"});
       return;
     }
     setOrders(o||[]);
+    setItems(i||[]);
     setShipments(sh||[]);
     setLinks(ln||[]);
   }
 
   useEffect(()=>{load()},[]);
 
-  const orderStatus=useMemo(()=>{
+  const itemStatus=useMemo(()=>{
     const map=new Map<number,View>();
-    for(const order of orders){
-      const shipmentIds=links.filter(x=>x.order_id===order.id).map(x=>x.shipment_id);
-      if(!shipmentIds.length){map.set(order.id,"preparing");continue}
+    for(const item of items){
+      const shipmentIds=links.filter(x=>x.item_id===item.id).map(x=>x.shipment_id);
+      if(!shipmentIds.length){map.set(item.id,"preparing");continue}
       const related=shipments.filter(x=>shipmentIds.includes(x.id));
-      map.set(order.id,related.length>0&&related.every(x=>x.status==="received")?"received":"shipped");
+      map.set(item.id,related.length>0&&related.every(x=>x.status==="received")?"received":"shipped");
     }
     return map;
-  },[orders,shipments,links]);
+  },[items,shipments,links]);
 
-  const preparing=orders.filter(x=>orderStatus.get(x.id)==="preparing");
+  const preparingItems=items.filter(x=>itemStatus.get(x.id)==="preparing");
   const shipped=shipments.filter(x=>x.status==="shipped");
   const received=shipments.filter(x=>x.status==="received");
+  const preparingOrders=orders.filter(o=>items.some(i=>i.order_id===o.id&&itemStatus.get(i.id)==="preparing"));
 
   function toggle(id:number){
     setSelected(prev=>{
@@ -87,20 +97,45 @@ export default function FactoryOrders({adminId}:{adminId:string}){
   async function addOrder(e:FormEvent<HTMLFormElement>){
     e.preventDefault();
     if(saving)return;
-    setSaving(true);setMessage(null);
     const form=e.currentTarget,f=new FormData(form);
-    const {error}=await supabase().from("factory_orders").insert({
+    const raw=String(f.get("product_details")||"");
+    const products=raw.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+    if(!products.length){
+      setMessage({type:"err",text:"أضف منتجًا واحدًا على الأقل."});
+      return;
+    }
+
+    setSaving(true);setMessage(null);
+    const s=supabase();
+    const {data:order,error:orderError}=await s.from("factory_orders").insert({
       factory_name:String(f.get("factory_name")).trim(),
-      product_details:String(f.get("product_details")).trim(),
+      product_details:products.join("\n"),
       order_date:String(f.get("order_date")),
       created_by:adminId
-    });
+    }).select("id").single();
+
+    if(orderError||!order){
+      setSaving(false);
+      setMessage({type:"err",text:orderError?.message||"تعذر إضافة الطلب"});
+      return;
+    }
+
+    const {error:itemError}=await s.from("factory_order_items").insert(
+      products.map(product_details=>({order_id:order.id,product_details}))
+    );
+
+    if(itemError){
+      await s.from("factory_orders").delete().eq("id",order.id);
+      setSaving(false);
+      setMessage({type:"err",text:itemError.message});
+      return;
+    }
+
     setSaving(false);
-    if(error){setMessage({type:"err",text:error.message});return}
     form.reset();
     const dateInput=form.elements.namedItem("order_date") as HTMLInputElement|null;
     if(dateInput)dateInput.value=todayDate();
-    setMessage({type:"ok",text:"تمت إضافة الطلب إلى قيد التجهيز."});
+    setMessage({type:"ok",text:"تمت إضافة الطلب والمنتجات إلى قيد التجهيز."});
     await load();
   }
 
@@ -123,8 +158,8 @@ export default function FactoryOrders({adminId}:{adminId:string}){
       return;
     }
 
-    const rows=Array.from(selected).map(order_id=>({shipment_id:shipment.id,order_id}));
-    const {error:linkError}=await s.from("shipment_orders").insert(rows);
+    const rows=Array.from(selected).map(item_id=>({shipment_id:shipment.id,item_id}));
+    const {error:linkError}=await s.from("shipment_items").insert(rows);
     if(linkError){
       await s.from("shipments").delete().eq("id",shipment.id);
       setSaving(false);
@@ -136,7 +171,7 @@ export default function FactoryOrders({adminId}:{adminId:string}){
     setSelected(new Set());
     setShowShipping(false);
     setView("shipped");
-    setMessage({type:"ok",text:"تم شحن الطلبات المحددة في شحنة واحدة."});
+    setMessage({type:"ok",text:"تم شحن المنتجات المحددة في شحنة واحدة."});
     await load();
   }
 
@@ -170,31 +205,36 @@ export default function FactoryOrders({adminId}:{adminId:string}){
   }
 
   const fmt=(value:string|null)=>value?new Date(value).toLocaleString("ar",{dateStyle:"medium",timeStyle:"short"}):"—";
-  const ordersFor=(shipmentId:number)=>orders.filter(o=>links.some(l=>l.shipment_id===shipmentId&&l.order_id===o.id));
-
-  const orderDetails=(o:FactoryOrder)=><div className="history" key={o.id}>
-    <b>{o.factory_name}</b>
-    <span>{o.product_details}</span>
-    <div className="dateLine">
-      <label>تاريخ الطلب</label>
-      <input type="date" value={o.order_date} onChange={e=>changeOrderDate(o.id,e.target.value)}/>
-    </div>
-  </div>;
+  const itemsForOrder=(orderId:number)=>items.filter(i=>i.order_id===orderId);
+  const itemsForShipment=(shipmentId:number)=>items.filter(i=>links.some(l=>l.shipment_id===shipmentId&&l.item_id===i.id));
+  const orderForItem=(item:FactoryOrderItem)=>orders.find(o=>o.id===item.order_id);
 
   const shipmentDateInput=(sh:Shipment)=><div className="dateLine top8">
     <label>تاريخ الشحن</label>
     <input type="date" value={sh.shipped_at.slice(0,10)} onChange={e=>changeShipmentDate(sh.id,e.target.value)}/>
   </div>;
 
+  const shipmentItem=(item:FactoryOrderItem)=>{
+    const order=orderForItem(item);
+    return <div className="history" key={item.id}>
+      <div className="row"><b>{order?.factory_name||"المصنع"}</b></div>
+      <span>{item.product_details}</span>
+      {order&&<div className="dateLine">
+        <label>تاريخ الطلب</label>
+        <input type="date" value={order.order_date} onChange={e=>changeOrderDate(order.id,e.target.value)}/>
+      </div>}
+    </div>;
+  };
+
   return <>
     <div className="row reportHead">
-      <div><h2>طلبات المصانع</h2><p className="muted">من تجهيز الطلب حتى استلام الشحنة</p></div>
+      <div><h2>طلبات المصانع</h2><p className="muted">كل منتج يمكن شحنه بشكل مستقل</p></div>
     </div>
 
     {message&&<div className={`notice ${message.type}`}>{message.text}</div>}
 
     <div className="tabs adminTabs">
-      <button className={view==="preparing"?"primary":""} onClick={()=>setView("preparing")}>قيد التجهيز ({preparing.length})</button>
+      <button className={view==="preparing"?"primary":""} onClick={()=>setView("preparing")}>قيد التجهيز ({preparingItems.length})</button>
       <button className={view==="shipped"?"primary":""} onClick={()=>setView("shipped")}>تم الشحن ({shipped.length})</button>
       <button className={view==="received"?"primary":""} onClick={()=>setView("received")}>تم الاستلام ({received.length})</button>
     </div>
@@ -202,33 +242,51 @@ export default function FactoryOrders({adminId}:{adminId:string}){
     {view==="preparing"&&<>
       <form className="card" onSubmit={addOrder}>
         <div className="field"><label>اسم المصنع</label><input name="factory_name" required/></div>
-        <div className="field"><label>تفاصيل المنتج</label><textarea name="product_details" placeholder="مثال: MG-825 × 500&#10;MG-834 × 300" required/></div>
+        <div className="field">
+          <label>المنتجات</label>
+          <textarea name="product_details" placeholder={"كل منتج في سطر منفصل\nمثال:\nشاحن سيارة × 500\nشاحن بيت × 500"} required/>
+          <div className="muted top8">اكتب كل منتج في سطر مستقل حتى تستطيع شحنه لوحده لاحقًا.</div>
+        </div>
         <div className="field"><label>تاريخ الطلب</label><input name="order_date" type="date" defaultValue={todayDate()} required/></div>
         <button className="primary full" disabled={saving}>{saving?"جاري الحفظ…":"إضافة الطلب"}</button>
       </form>
 
-      {preparing.length>0&&<div className="card">
-        <div className="row"><b>اختر الطلبات التي شُحنت معًا</b><span className="badge">{selected.size}</span></div>
-        {preparing.map(order=><div className="customer factoryOrderRow" key={order.id}>
-          <input type="checkbox" checked={selected.has(order.id)} onChange={()=>toggle(order.id)}/>
-          <div>
-            <b>{order.factory_name}</b>
-            <div>{order.product_details}</div>
-            <div className="dateLine top8">
-              <label>تاريخ الطلب</label>
-              <input type="date" value={order.order_date} onChange={e=>changeOrderDate(order.id,e.target.value)}/>
-            </div>
-          </div>
-        </div>)}
-        <button className="primary full" disabled={!selected.size} onClick={()=>setShowShipping(true)}>تم الشحن</button>
-      </div>}
+      {preparingOrders.map(order=><div className="card factoryOrderCard" key={order.id}>
+        <div className="row">
+          <b>{order.factory_name}</b>
+          <span className="badge">{itemsForOrder(order.id).length} منتج</span>
+        </div>
+        <div className="dateLine top8">
+          <label>تاريخ الطلب</label>
+          <input type="date" value={order.order_date} onChange={e=>changeOrderDate(order.id,e.target.value)}/>
+        </div>
 
-      {!preparing.length&&<div className="card muted">لا توجد طلبات قيد التجهيز.</div>}
+        <div className="factoryItems">
+          {itemsForOrder(order.id).map(item=>{
+            const status=itemStatus.get(item.id)||"preparing";
+            return <div className="customer factoryItemRow" key={item.id}>
+              {status==="preparing"
+                ?<input type="checkbox" checked={selected.has(item.id)} onChange={()=>toggle(item.id)}/>
+                :<span className="checkboxSpacer"/>}
+              <div className="factoryItemText">{item.product_details}</div>
+              <span className={status==="received"?"status ok":"status"}>
+                {status==="preparing"?"قيد التجهيز":status==="shipped"?"تم الشحن":"تم الاستلام"}
+              </span>
+            </div>
+          })}
+        </div>
+      </div>)}
+
+      {preparingItems.length>0&&<button className="primary full" disabled={!selected.size} onClick={()=>setShowShipping(true)}>
+        تم شحن المنتجات المحددة ({selected.size})
+      </button>}
+
+      {!preparingItems.length&&<div className="card muted">لا توجد منتجات قيد التجهيز.</div>}
 
       {showShipping&&<div className="modal">
         <div className="modalBox">
           <div className="row"><h3>تسجيل الشحنة</h3><button onClick={()=>setShowShipping(false)}>✕</button></div>
-          <p className="muted">{selected.size} طلب سيتم ربطها بنفس الشحنة.</p>
+          <p className="muted">{selected.size} منتج سيتم ربطها بنفس الشحنة.</p>
           <form onSubmit={createShipment}>
             <div className="field"><label>شركة الشحن</label><input name="carrier" required/></div>
             <div className="field"><label>رقم الشحنة / التتبع</label><input name="tracking_number" required/></div>
@@ -246,7 +304,7 @@ export default function FactoryOrders({adminId}:{adminId:string}){
           <span className="status">تم الشحن</span>
         </div>
         {shipmentDateInput(sh)}
-        <div className="visitDetails">{ordersFor(sh.id).map(orderDetails)}</div>
+        <div className="visitDetails">{itemsForShipment(sh.id).map(shipmentItem)}</div>
         <button className="primary full" disabled={saving} onClick={()=>receiveShipment(sh.id)}>تم الاستلام</button>
       </div>)}
       {!shipped.length&&<div className="card muted">لا توجد شحنات قيد الاستلام.</div>}
@@ -260,7 +318,7 @@ export default function FactoryOrders({adminId}:{adminId:string}){
         </div>
         {shipmentDateInput(sh)}
         <div className="muted top8">تم الاستلام: {fmt(sh.received_at)}</div>
-        <div className="visitDetails">{ordersFor(sh.id).map(orderDetails)}</div>
+        <div className="visitDetails">{itemsForShipment(sh.id).map(shipmentItem)}</div>
       </div>)}
       {!received.length&&<div className="card muted">لا توجد شحنات مستلمة بعد.</div>}
     </>}
