@@ -22,3 +22,24 @@
 .factoryItemText{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .checkboxSpacer{width:24px;min-width:24px;display:block}
 .factoryItemRow .status{margin-inline-start:auto}
+
+/* Cleaner administration header/navigation */
+.shell>.adminTabs{display:flex;gap:8px;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.shell>.adminTabs::-webkit-scrollbar{display:none}
+.shell>.adminTabs button{flex:0 0 auto}
+.main>.adminTabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;border:0;padding:0 0 14px;background:transparent}
+.main>.adminTabs button{width:100%;padding:11px 8px}
+@media(max-width:600px){
+  .head{padding:14px 16px}
+  .head .brand{font-size:22px;line-height:1.1}
+  .head small{font-size:13px;color:#cbd5e1}
+  .head button{padding:8px 12px;border-radius:10px;background:#ffffff14;color:#fff;border:1px solid #ffffff26}
+  .shell>.adminTabs{padding:10px 14px;gap:7px}
+  .shell>.adminTabs button{padding:9px 12px;border-radius:10px;font-size:14px}
+  .main{padding-top:14px}
+  .reportHead{margin:0 0 10px}
+  .reportHead h2{font-size:23px;line-height:1.2;margin:0 0 4px}
+  .reportHead p{font-size:13px}
+  .main>.adminTabs{gap:6px;padding-bottom:10px}
+  .main>.adminTabs button{font-size:13px;padding:10px 5px;border-radius:10px}
+}
